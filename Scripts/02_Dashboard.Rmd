@@ -1,0 +1,1852 @@
+---
+title: "Unsere Wege"
+output:
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: fill
+    self_contained: false
+knit: >-
+  (function(inputFile, encoding) {
+    inputFile <- normalizePath(inputFile);
+    project_dir <- dirname(dirname(inputFile));
+    output_dir <- file.path(project_dir, "Data", "3_Output");
+    dir.create(output_dir, recursive = TRUE, showWarnings = FALSE);
+    rmarkdown::render(
+      inputFile,
+      encoding = encoding,
+      output_file = "index.html",
+      output_dir = output_dir
+    )
+  })
+---
+
+<style>
+.track-stats {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.track-stats th {
+  padding: 7px 8px;
+  text-align: right;
+  color: #65727d;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .055em;
+  text-transform: uppercase;
+  border-bottom: 1px solid #cfd7dd;
+  white-space: nowrap;
+}
+
+.track-stats th:first-child,
+.track-stats th:nth-child(2) {
+  text-align: left;
+}
+
+.track-stats td {
+  padding: 7px 8px;
+  text-align: right;
+  border-bottom: 1px solid #e2e7eb;
+  white-space: nowrap;
+}
+
+.track-stats td:first-child,
+.track-stats td:nth-child(2) {
+  text-align: left;
+}
+
+.track-stats td.num {
+  font-weight: 700;
+}
+
+.track-stats tr:last-child td {
+  border-bottom: 0;
+}
+</style>
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE
+)
+
+# The dashboard reads CLEANED GPX files only.
+# All route-specific cleaning is done by 01_Preprocess.R.
+#
+# Packages:
+# install.packages(c(
+#   "flexdashboard", "rmarkdown", "xml2",
+#   "leaflet", "plotly", "htmltools"
+# ))
+
+required_packages <- c(
+  "xml2",
+  "leaflet",
+  "plotly",
+  "htmltools"
+)
+
+missing_packages <- required_packages[
+  !vapply(
+    required_packages,
+    requireNamespace,
+    logical(1),
+    quietly = TRUE
+  )
+]
+
+if (length(missing_packages) > 0) {
+  stop(
+    "Install required package(s): ",
+    paste(
+      missing_packages,
+      collapse = ", "
+    )
+  )
+}
+
+
+input_rmd <- knitr::current_input(
+  dir = TRUE
+)
+
+if (
+  length(input_rmd) == 1 &&
+  !is.na(input_rmd) &&
+  nzchar(input_rmd)
+) {
+  script_dir <- dirname(
+    normalizePath(input_rmd)
+  )
+} else {
+  script_dir <- normalizePath(".")
+}
+
+project_dir <- if (
+  basename(script_dir) == "Scripts"
+) {
+  dirname(script_dir)
+} else {
+  stop(
+    "02_Dashboard.Rmd must be stored in the project's Scripts/ folder."
+  )
+}
+
+intermediate_dir <- file.path(
+  project_dir,
+  "Data",
+  "2_Intermediate"
+)
+
+output_dir <- file.path(
+  project_dir,
+  "Data",
+  "3_Output"
+)
+
+dir.create(
+  output_dir,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+manifest_file <- file.path(
+  intermediate_dir,
+  "UnsereWege_manifest.csv"
+)
+
+if (!file.exists(manifest_file)) {
+  stop(
+    paste0(
+      "Preprocessed manifest not found. Run Scripts/01_Preprocess.R first: ",
+      manifest_file
+    )
+  )
+}
+
+tz_local <- "Europe/Vienna"
+
+
+# ============================================================
+# 1. READ CLEANED GPX
+# ============================================================
+
+manifest <- utils::read.table(
+  manifest_file,
+  header = TRUE,
+  sep = ";",
+  dec = ".",
+  quote = "\"",
+  stringsAsFactors = FALSE,
+  fileEncoding = "UTF-8",
+  check.names = FALSE
+)
+
+manifest$date_local <- as.Date(
+  manifest$date_local
+)
+
+manifest <- manifest[
+  order(
+    manifest$date_local,
+    manifest$group,
+    manifest$day_no
+  ),
+]
+
+rownames(manifest) <- NULL
+
+gpx_paths <- file.path(
+  intermediate_dir,
+  manifest$gpx_file
+)
+
+if (any(!file.exists(gpx_paths))) {
+  stop(
+    "Missing cleaned GPX file(s): ",
+    paste(
+      basename(
+        gpx_paths[
+          !file.exists(gpx_paths)
+        ]
+      ),
+      collapse = ", "
+    )
+  )
+}
+
+
+read_clean_gpx <- function(i) {
+  meta <- manifest[
+    i,
+  ]
+
+  file <- file.path(
+    intermediate_dir,
+    meta$gpx_file
+  )
+
+  doc <- xml2::read_xml(file)
+
+  p <- xml2::xml_find_all(
+    doc,
+    ".//*[local-name()='trkpt']"
+  )
+
+  time_utc <- as.POSIXct(
+    xml2::xml_text(
+      xml2::xml_find_first(
+        p,
+        "./*[local-name()='time']"
+      )
+    ),
+    format = "%Y-%m-%dT%H:%M:%OSZ",
+    tz = "UTC"
+  )
+
+  local_dates <- unique(
+    as.Date(
+      format(
+        time_utc,
+        tz = tz_local,
+        format = "%Y-%m-%d"
+      )
+    )
+  )
+
+  if (
+    length(local_dates) != 1 ||
+    local_dates != meta$date_local
+  ) {
+    stop(
+      "Cleaned GPX date does not match manifest: ",
+      meta$gpx_file
+    )
+  }
+
+  data.frame(
+    source_track   = meta$day_id,
+    group          = meta$group,
+    group_label    = meta$group_label,
+    day_no         = meta$day_no,
+    day_id         = meta$day_id,
+    display_day_id = meta$day_id,
+    time_utc       = time_utc,
+    date_local     = meta$date_local,
+    date_label     = format(
+      meta$date_local,
+      "%d %b %Y"
+    ),
+    legend_label   = paste0(
+      meta$day_id,
+      " · ",
+      format(
+        meta$date_local,
+        "%d %b %Y"
+      )
+    ),
+    lon = as.numeric(
+      xml2::xml_attr(
+        p,
+        "lon"
+      )
+    ),
+    lat = as.numeric(
+      xml2::xml_attr(
+        p,
+        "lat"
+      )
+    ),
+    elevation = as.numeric(
+      xml2::xml_text(
+        xml2::xml_find_first(
+          p,
+          "./*[local-name()='ele']"
+        )
+      )
+    ),
+    stringsAsFactors = FALSE
+  )
+}
+
+
+raw_points <- do.call(
+  rbind,
+  lapply(
+    seq_len(nrow(manifest)),
+    read_clean_gpx
+  )
+)
+
+raw_points <- raw_points[
+  order(
+    raw_points$group,
+    raw_points$day_no,
+    raw_points$time_utc
+  ),
+]
+
+rownames(raw_points) <- NULL
+
+
+# ============================================================
+# 2. DERIVED WALKING METRICS
+#
+# This is analysis, not cleaning:
+# distance, smoothed elevation, ascent/descent, and break/active time.
+# ============================================================
+
+haversine <- function(lon1, lat1, lon2, lat2) {
+  r <- 6371000
+
+  p1 <- lat1 * pi / 180
+  p2 <- lat2 * pi / 180
+  dp <- (lat2 - lat1) * pi / 180
+  dl <- (lon2 - lon1) * pi / 180
+
+  a <- sin(dp / 2)^2 +
+    cos(p1) * cos(p2) * sin(dl / 2)^2
+
+  2 * r * asin(
+    sqrt(
+      pmin(
+        1,
+        a
+      )
+    )
+  )
+}
+
+
+break_speed_kmh   <- 1
+break_min_minutes <- 2
+break_diameter_m  <- 60
+break_vertical_m  <- 15
+
+
+bbox_diameter_m <- function(lon, lat) {
+  if (length(lon) < 2) {
+    return(0)
+  }
+
+  lon_min <- min(lon)
+  lon_max <- max(lon)
+  lat_min <- min(lat)
+  lat_max <- max(lat)
+  lat_mid <- mean(
+    c(
+      lat_min,
+      lat_max
+    )
+  )
+
+  dx <- haversine(
+    lon_min,
+    lat_mid,
+    lon_max,
+    lat_mid
+  )
+
+  dy <- haversine(
+    lon_min,
+    lat_min,
+    lon_min,
+    lat_max
+  )
+
+  sqrt(
+    dx^2 +
+      dy^2
+  )
+}
+
+
+detect_break_intervals <- function(d) {
+  n <- nrow(d)
+
+  if (n < 2) {
+    return(
+      logical(0)
+    )
+  }
+
+  dt_h <- as.numeric(
+    diff(
+      d$time_utc
+    ),
+    units = "hours"
+  )
+
+  step_m <- haversine(
+    d$lon[-n],
+    d$lat[-n],
+    d$lon[-1],
+    d$lat[-1]
+  )
+
+  speed_kmh <- ifelse(
+    dt_h > 0,
+    step_m / 1000 / dt_h,
+    Inf
+  )
+
+  low_speed <- speed_kmh <= break_speed_kmh
+  is_break <- rep(
+    FALSE,
+    n - 1
+  )
+
+  i <- 1
+
+  while (i <= n - 1) {
+    if (!low_speed[i]) {
+      i <- i + 1
+      next
+    }
+
+    j <- i
+
+    while (
+      j < n - 1 &&
+      low_speed[j + 1]
+    ) {
+      j <- j + 1
+    }
+
+    point_idx <- i:(j + 1)
+
+    duration_min <- sum(
+      as.numeric(
+        diff(
+          d$time_utc[point_idx]
+        ),
+        units = "mins"
+      )
+    )
+
+    dz <- diff(
+      d$ele_smooth[point_idx]
+    )
+
+    ascent_m <- sum(
+      pmax(
+        dz,
+        0
+      ),
+      na.rm = TRUE
+    )
+
+    descent_m <- sum(
+      pmax(
+        -dz,
+        0
+      ),
+      na.rm = TRUE
+    )
+
+    diameter_m <- bbox_diameter_m(
+      d$lon[point_idx],
+      d$lat[point_idx]
+    )
+
+    if (
+      duration_min >= break_min_minutes &&
+      diameter_m <= break_diameter_m &&
+      ascent_m <= break_vertical_m &&
+      descent_m <= break_vertical_m
+    ) {
+      is_break[i:j] <- TRUE
+    }
+
+    i <- j + 1
+  }
+
+  is_break
+}
+
+
+prepare_one_day <- function(d) {
+  d <- d[
+    order(
+      d$time_utc,
+      d$source_track
+    ),
+  ]
+
+  n <- nrow(d)
+
+  step_m <- c(
+    0,
+    haversine(
+      d$lon[-n],
+      d$lat[-n],
+      d$lon[-1],
+      d$lat[-1]
+    )
+  )
+
+  dt_min <- c(
+    0,
+    as.numeric(
+      diff(
+        d$time_utc
+      ),
+      units = "mins"
+    )
+  )
+
+  k <- min(
+    9,
+    n
+  )
+
+  if (k %% 2 == 0) {
+    k <- k - 1
+  }
+
+  ele_smooth <- if (k >= 3) {
+    stats::runmed(
+      d$elevation,
+      k = k,
+      endrule = "median"
+    )
+  } else {
+    d$elevation
+  }
+
+  dz <- c(
+    0,
+    diff(
+      ele_smooth
+    )
+  )
+
+  d$ele_smooth    <- ele_smooth
+  d$step_m        <- step_m
+  d$dt_min        <- dt_min
+  d$gain_step_m   <- pmax(dz, 0)
+  d$loss_step_m   <- pmax(-dz, 0)
+  d$distance_km   <- cumsum(step_m) / 1000
+  d$cum_ascent_m  <- cumsum(d$gain_step_m)
+  d$cum_descent_m <- cumsum(d$loss_step_m)
+
+  break_interval <- detect_break_intervals(
+    d
+  )
+
+  interval_min <- if (n >= 2) {
+    as.numeric(
+      diff(
+        d$time_utc
+      ),
+      units = "mins"
+    )
+  } else {
+    numeric(0)
+  }
+
+  elapsed_min <- if (n >= 2) {
+    as.numeric(
+      difftime(
+        d$time_utc[n],
+        d$time_utc[1],
+        units = "mins"
+      )
+    )
+  } else {
+    0
+  }
+
+  break_min <- sum(
+    interval_min[
+      break_interval
+    ],
+    na.rm = TRUE
+  )
+
+  active_min <- elapsed_min -
+    break_min
+
+  d$is_break_from_previous <- c(
+    FALSE,
+    break_interval
+  )
+
+  d$elapsed_h <- elapsed_min / 60
+  d$break_h   <- break_min / 60
+  d$active_h  <- active_min / 60
+
+  d
+}
+
+
+points_split <- split(
+  raw_points,
+  raw_points$day_id
+)
+
+points <- do.call(
+  rbind,
+  lapply(
+    points_split,
+    prepare_one_day
+  )
+)
+
+points <- points[
+  order(
+    points$group,
+    points$day_no,
+    points$time_utc
+  ),
+]
+
+rownames(points) <- NULL
+
+
+# ============================================================
+# 3. DAY + GROUP SUMMARIES
+# ============================================================
+
+day_split <- split(
+  points,
+  points$day_id
+)
+
+days <- do.call(
+  rbind,
+  lapply(
+    day_split,
+    function(d) {
+      data.frame(
+        day_id        = d$day_id[1],
+        display_day_id = d$display_day_id[1],
+        day_no        = d$day_no[1],
+        group         = d$group[1],
+        group_label   = d$group_label[1],
+        date_local    = d$date_local[1],
+        date_label    = d$date_label[1],
+        legend_label  = d$legend_label[1],
+        source_tracks = d$source_track[1],
+        n_points      = nrow(d),
+        distance_km   = max(d$distance_km),
+        elapsed_h     = d$elapsed_h[1],
+        active_h      = d$active_h[1],
+        break_h       = d$break_h[1],
+        ascent_m      = max(d$cum_ascent_m),
+        descent_m     = max(d$cum_descent_m),
+        min_m         = min(
+          d$ele_smooth,
+          na.rm = TRUE
+        ),
+        max_m         = max(
+          d$ele_smooth,
+          na.rm = TRUE
+        ),
+        stringsAsFactors = FALSE
+      )
+    }
+  )
+)
+
+days <- days[
+  order(
+    days$group,
+    days$day_no
+  ),
+]
+
+rownames(days) <- NULL
+
+
+days$day_color <- NA_character_
+
+for (g in unique(days$group)) {
+  jj <- which(
+    days$group == g
+  )
+
+  days$day_color[jj] <- grDevices::hcl.colors(
+    length(jj),
+    palette = "Dark 3"
+  )
+}
+
+
+days$distance_start_km <- 0
+
+for (g in unique(days$group)) {
+  jj <- which(
+    days$group == g
+  )
+
+  x <- days$distance_km[jj]
+
+  days$distance_start_km[jj] <- c(
+    0,
+    head(
+      cumsum(x),
+      -1
+    )
+  )
+}
+
+days$distance_end_km <- days$distance_start_km +
+  days$distance_km
+
+
+jj <- match(
+  points$day_id,
+  days$day_id
+)
+
+points$day_color <- days$day_color[jj]
+
+points$group_distance_km <- points$distance_km +
+  days$distance_start_km[jj]
+
+
+group_split <- split(
+  days,
+  days$group
+)
+
+groups <- do.call(
+  rbind,
+  lapply(
+    group_split,
+    function(d) {
+      data.frame(
+        group          = d$group[1],
+        group_label    = d$group_label[1],
+        n_days         = nrow(d),
+        distance_km    = sum(d$distance_km),
+        elapsed_h      = sum(d$elapsed_h),
+        active_h       = sum(d$active_h),
+        break_h        = sum(d$break_h),
+        ascent_m       = sum(d$ascent_m),
+        descent_m      = sum(d$descent_m),
+        min_m          = min(d$min_m),
+        max_m          = max(d$max_m),
+        stringsAsFactors = FALSE
+      )
+    }
+  )
+)
+
+rownames(groups) <- NULL
+
+
+# ============================================================
+# 4. CONSISTENCY CHECKS
+# ============================================================
+
+stopifnot(
+  nrow(days) == nrow(manifest),
+  !anyDuplicated(
+    days$day_id
+  ),
+  setequal(
+    unique(
+      points$day_id
+    ),
+    manifest$day_id
+  ),
+  all(
+    points$day_color ==
+      days$day_color[
+        match(
+          points$day_id,
+          days$day_id
+        )
+      ]
+  ),
+  all(
+    points$group_distance_km >= 0
+  ),
+  all(
+    abs(
+      days$elapsed_h -
+      days$active_h -
+      days$break_h
+    ) < 1e-8
+  )
+)
+
+point_count <- table(
+  points$day_id
+)
+
+stopifnot(
+  all(
+    days$n_points ==
+      as.integer(
+        point_count[
+          days$day_id
+        ]
+      )
+  )
+)
+
+
+# ============================================================
+# EVERYTHING BELOW IS VISUALIZATION ONLY.
+# ============================================================
+
+make_map <- function(group) {
+  d <- points[
+    points$group == group,
+  ]
+
+  s <- days[
+    days$group == group,
+  ]
+
+  m <- leaflet::leaflet(
+    options = leaflet::leafletOptions(
+      preferCanvas = TRUE
+    )
+  )
+
+  m <- leaflet::addProviderTiles(
+    m,
+    leaflet::providers$CartoDB.Positron,
+    group = "Map"
+  )
+
+  m <- leaflet::addProviderTiles(
+    m,
+    leaflet::providers$Esri.WorldImagery,
+    group = "Satellite"
+  )
+
+  for (day in s$day_id) {
+    x <- d[
+      d$day_id == day,
+    ]
+
+    ss <- s[
+      s$day_id == day,
+    ]
+
+    popup <- paste0(
+      "<b>", ss$display_day_id, "</b>",
+      "<br>", ss$date_label,
+      "<br>", round(ss$distance_km, 1), " km",
+      "<br>+", round(ss$ascent_m), " m",
+      " / −", round(ss$descent_m), " m",
+      "<br>", round(ss$active_h, 1), " active hours",
+      "<br><small>Source: ",
+      ss$source_tracks,
+      "</small>"
+    )
+
+    # Opaque white outline.
+    m <- leaflet::addPolylines(
+      m,
+      data = x,
+      lng = ~lon,
+      lat = ~lat,
+      color = "white",
+      weight = 6,
+      opacity = 1,
+      group = ss$display_day_id
+    )
+
+    # Same final day colour as Compare days.
+    m <- leaflet::addPolylines(
+      m,
+      data = x,
+      lng = ~lon,
+      lat = ~lat,
+      color = ss$day_color,
+      weight = 3,
+      opacity = 1,
+      group = ss$display_day_id,
+      label = ss$legend_label,
+      popup = popup,
+      highlightOptions = leaflet::highlightOptions(
+        weight = 5,
+        opacity = 1,
+        bringToFront = TRUE
+      )
+    )
+  }
+
+  m <- leaflet::addLayersControl(
+    m,
+    baseGroups = c(
+      "Satellite",
+      "Map"
+    ),
+    overlayGroups = s$display_day_id,
+    options = leaflet::layersControlOptions(
+      collapsed = TRUE
+    )
+  )
+
+  m <- leaflet::hideGroup(
+    m,
+    "Map"
+  )
+
+  leaflet::addScaleBar(
+    m,
+    position = "bottomleft"
+  )
+}
+
+
+make_elevation_sequential <- function(group) {
+  d <- points[
+    points$group == group,
+  ]
+
+  s <- days[
+    days$group == group,
+  ]
+
+  yr <- range(
+    d$ele_smooth,
+    na.rm = TRUE
+  )
+
+  ypad_low <- max(
+    60,
+    diff(yr) * 0.08
+  )
+
+  ypad_high <- max(
+    100,
+    diff(yr) * 0.12
+  )
+
+  p <- plotly::plot_ly()
+
+  for (day in s$day_id) {
+    x <- d[
+      d$day_id == day,
+    ]
+
+    ss <- s[
+      s$day_id == day,
+    ]
+
+    txt <- paste0(
+      "<b>", ss$display_day_id, "</b>",
+      "<br>", ss$date_label,
+      "<br>Day distance: ",
+      round(x$distance_km, 2),
+      " km",
+      "<br>Total distance: ",
+      round(x$group_distance_km, 2),
+      " km",
+      "<br>Elevation: ",
+      round(x$ele_smooth),
+      " m"
+    )
+
+    p <- plotly::add_trace(
+      p,
+      x = x$group_distance_km,
+      y = x$ele_smooth,
+      type = "scatter",
+      mode = "lines",
+      name = ss$legend_label,
+      text = txt,
+      hoverinfo = "text",
+      line = list(
+        color = ss$day_color,
+        width = 3
+      )
+    )
+  }
+
+  boundaries <- head(
+    s$distance_end_km,
+    -1
+  )
+
+  shapes <- lapply(
+    boundaries,
+    function(x) {
+      list(
+        type = "line",
+        x0 = x,
+        x1 = x,
+        y0 = 0,
+        y1 = 1,
+        yref = "paper",
+        line = list(
+          width = 1,
+          dash = "dot",
+          color = "rgba(80,80,80,0.45)"
+        )
+      )
+    }
+  )
+
+  plotly::layout(
+    p,
+    xaxis = list(
+      title = "Cumulative distance across days (km)",
+      zeroline = FALSE
+    ),
+    yaxis = list(
+      title = "Elevation (m)",
+      zeroline = FALSE,
+      range = c(
+        yr[1] - ypad_low,
+        yr[2] + ypad_high
+      )
+    ),
+    hovermode = "closest",
+    showlegend = TRUE,
+    legend = list(
+      orientation = "v",
+      x = 1.02,
+      y = 1,
+      xanchor = "left",
+      yanchor = "top"
+    ),
+    shapes = shapes,
+    margin = list(
+      t = 35,
+      r = 175,
+      b = 60,
+      l = 65
+    )
+  )
+}
+
+
+make_compare_days <- function(group) {
+  s <- days[
+    days$group == group,
+  ]
+
+  xr <- range(
+    s$distance_km,
+    na.rm = TRUE
+  )
+
+  yr <- range(
+    s$ascent_m,
+    na.rm = TRUE
+  )
+
+  xpad <- max(
+    0.5,
+    diff(xr) * 0.08
+  )
+
+  ypad_low <- max(
+    50,
+    diff(yr) * 0.10
+  )
+
+  ypad_high <- max(
+    100,
+    diff(yr) * 0.20
+  )
+
+  p <- plotly::plot_ly()
+
+  for (day in s$day_id) {
+    ss <- s[
+      s$day_id == day,
+    ]
+
+    # Plotly marker size is diameter in pixels.
+    # Diameter proportional to sqrt(active hours) makes marker area
+    # proportional to active walking time. A small minimum keeps
+    # partial/zero-active days visible.
+    marker_size <- max(
+      7,
+      11 * sqrt(ss$active_h)
+    )
+
+    txt <- paste0(
+      "<b>", ss$display_day_id, "</b>",
+      "<br>", ss$date_label,
+      "<br>Distance: ",
+      round(ss$distance_km, 1),
+      " km",
+      "<br>Height climbed: +",
+      round(ss$ascent_m),
+      " m",
+      "<br>Height descended: −",
+      round(ss$descent_m),
+      " m",
+      "<br>Active: ",
+      round(ss$active_h, 1),
+      " h",
+      "<br>Break: ",
+      round(ss$break_h, 1),
+      " h"
+    )
+
+    p <- plotly::add_trace(
+      p,
+      x = ss$distance_km,
+      y = ss$ascent_m,
+      type = "scatter",
+      mode = "markers+text",
+      name = ss$legend_label,
+      text = ss$display_day_id,
+      textposition = "top center",
+      hovertext = txt,
+      hoverinfo = "text",
+      marker = list(
+        size = marker_size,
+        color = ss$day_color,
+        opacity = 0.9,
+        line = list(
+          color = "white",
+          width = 2
+        )
+      )
+    )
+  }
+
+  plotly::layout(
+    p,
+    xaxis = list(
+      title = "Distance (km)",
+      zeroline = FALSE,
+      range = c(
+        xr[1] - xpad,
+        xr[2] + xpad
+      )
+    ),
+    yaxis = list(
+      title = "Height climbed (m)",
+      zeroline = FALSE,
+      range = c(
+        max(0, yr[1] - ypad_low),
+        yr[2] + ypad_high
+      )
+    ),
+    hovermode = "closest",
+    legend = list(
+      orientation = "v",
+      x = 1.02,
+      y = 1,
+      xanchor = "left",
+      yanchor = "top"
+    ),
+    margin = list(
+      t = 35,
+      r = 175,
+      b = 60,
+      l = 70
+    )
+  )
+}
+
+format_hours <- function(x) {
+  h <- floor(x)
+  m <- round(
+    (x - h) * 60
+  )
+
+  if (m == 60) {
+    h <- h + 1
+    m <- 0
+  }
+
+  sprintf(
+    "%d:%02d",
+    h,
+    m
+  )
+}
+
+
+make_stats_table <- function(group) {
+  s <- days[
+    days$group == group,
+  ]
+
+  rows <- lapply(
+    seq_len(nrow(s)),
+    function(i) {
+      htmltools::tags$tr(
+        htmltools::tags$td(
+          htmltools::tags$strong(
+            s$display_day_id[i]
+          )
+        ),
+        htmltools::tags$td(
+          s$date_label[i]
+        ),
+        htmltools::tags$td(
+          class = "num",
+          sprintf(
+            "%.1f",
+            s$distance_km[i]
+          )
+        ),
+        htmltools::tags$td(
+          class = "num",
+          format_hours(
+            s$elapsed_h[i]
+          )
+        ),
+        htmltools::tags$td(
+          class = "num",
+          format_hours(
+            s$active_h[i]
+          )
+        ),
+        htmltools::tags$td(
+          class = "num",
+          format_hours(
+            s$break_h[i]
+          )
+        ),
+        htmltools::tags$td(
+          class = "num",
+          paste0(
+            "+",
+            round(s$ascent_m[i])
+          )
+        ),
+        htmltools::tags$td(
+          class = "num",
+          paste0(
+            "−",
+            round(s$descent_m[i])
+          )
+        ),
+        htmltools::tags$td(
+          class = "num",
+          paste0(
+            round(s$min_m[i]),
+            "–",
+            round(s$max_m[i])
+          )
+        )
+      )
+    }
+  )
+
+  htmltools::tags$div(
+    style = "overflow-x:auto; padding:2px 4px 4px 4px;",
+    htmltools::tags$table(
+      class = "track-stats",
+      htmltools::tags$thead(
+        htmltools::tags$tr(
+          htmltools::tags$th("Day"),
+          htmltools::tags$th("Date"),
+          htmltools::tags$th("km"),
+          htmltools::tags$th("Elapsed"),
+          htmltools::tags$th("Active"),
+          htmltools::tags$th("Break"),
+          htmltools::tags$th("↑ m"),
+          htmltools::tags$th("↓ m"),
+          htmltools::tags$th("Elevation m")
+        )
+      ),
+      htmltools::tags$tbody(
+        rows
+      )
+    )
+  )
+}
+
+group_stat <- function(group, variable) {
+  groups[
+    groups$group == group,
+    variable
+  ]
+}
+```
+
+2022: Abtenau
+=====================================
+
+Row {data-height=105}
+-----------------------------------------------------------------------
+
+### Distance
+
+```{r}
+flexdashboard::valueBox(
+  paste0(
+    round(
+      group_stat(
+        "AB",
+        "distance_km"
+      ),
+      1
+    ),
+    " km"
+  ),
+  caption = "Abtenau · total distance",
+  color = "primary"
+)
+```
+
+### Climbing
+
+```{r}
+flexdashboard::valueBox(
+  paste0(
+    round(
+      group_stat(
+        "AB",
+        "ascent_m"
+      )
+    ),
+    " m"
+  ),
+  caption = "Abtenau · total ascent",
+  color = "warning"
+)
+```
+
+### Descending
+
+```{r}
+flexdashboard::valueBox(
+  paste0(
+    round(
+      group_stat(
+        "AB",
+        "descent_m"
+      )
+    ),
+    " m"
+  ),
+  caption = "Abtenau · total descent",
+  color = "info"
+)
+```
+
+### Highest point
+
+```{r}
+flexdashboard::valueBox(
+  paste0(
+    round(
+      group_stat(
+        "AB",
+        "max_m"
+      )
+    ),
+    " m"
+  ),
+  caption = "Abtenau · highest point",
+  color = "success"
+)
+```
+
+Row {data-height=475}
+-----------------------------------------------------------------------
+
+### Route
+
+```{r}
+make_map("AB")
+```
+
+### Elevation plot
+
+```{r}
+make_elevation_sequential("AB")
+```
+
+Row {data-height=420}
+-----------------------------------------------------------------------
+
+### Compare days · distance vs height climbed
+
+```{r}
+make_compare_days("AB")
+```
+
+### Day statistics
+
+```{r}
+make_stats_table("AB")
+```
+
+2023: GR20 Nord
+=====================================
+
+Row {data-height=105}
+-----------------------------------------------------------------------
+
+### Distance
+
+```{r}
+flexdashboard::valueBox(
+  paste0(
+    round(
+      group_stat(
+        "JR",
+        "distance_km"
+      ),
+      1
+    ),
+    " km"
+  ),
+  caption = "GR20 Nord · total distance",
+  color = "primary"
+)
+```
+
+### Climbing
+
+```{r}
+flexdashboard::valueBox(
+  paste0(
+    round(
+      group_stat(
+        "JR",
+        "ascent_m"
+      )
+    ),
+    " m"
+  ),
+  caption = "GR20 Nord · total ascent",
+  color = "warning"
+)
+```
+
+### Descending
+
+```{r}
+flexdashboard::valueBox(
+  paste0(
+    round(
+      group_stat(
+        "JR",
+        "descent_m"
+      )
+    ),
+    " m"
+  ),
+  caption = "GR20 Nord · total descent",
+  color = "info"
+)
+```
+
+### Highest point
+
+```{r}
+flexdashboard::valueBox(
+  paste0(
+    round(
+      group_stat(
+        "JR",
+        "max_m"
+      )
+    ),
+    " m"
+  ),
+  caption = "GR20 Nord · highest point",
+  color = "success"
+)
+```
+
+Row {data-height=475}
+-----------------------------------------------------------------------
+
+### Route
+
+```{r}
+make_map("JR")
+```
+
+### Elevation plot
+
+```{r}
+make_elevation_sequential("JR")
+```
+
+Row {data-height=420}
+-----------------------------------------------------------------------
+
+### Compare days · distance vs height climbed
+
+```{r}
+make_compare_days("JR")
+```
+
+### Day statistics
+
+```{r}
+make_stats_table("JR")
+```
+
+2024: Galtür
+=====================================
+
+Row {data-height=105}
+-----------------------------------------------------------------------
+
+### Distance
+
+```{r}
+flexdashboard::valueBox(
+  paste0(
+    round(
+      group_stat(
+        "GAL",
+        "distance_km"
+      ),
+      1
+    ),
+    " km"
+  ),
+  caption = "Galtür · total distance",
+  color = "primary"
+)
+```
+
+### Climbing
+
+```{r}
+flexdashboard::valueBox(
+  paste0(
+    round(
+      group_stat(
+        "GAL",
+        "ascent_m"
+      )
+    ),
+    " m"
+  ),
+  caption = "Galtür · total ascent",
+  color = "warning"
+)
+```
+
+### Descending
+
+```{r}
+flexdashboard::valueBox(
+  paste0(
+    round(
+      group_stat(
+        "GAL",
+        "descent_m"
+      )
+    ),
+    " m"
+  ),
+  caption = "Galtür · total descent",
+  color = "info"
+)
+```
+
+### Highest point
+
+```{r}
+flexdashboard::valueBox(
+  paste0(
+    round(
+      group_stat(
+        "GAL",
+        "max_m"
+      )
+    ),
+    " m"
+  ),
+  caption = "Galtür · highest point",
+  color = "success"
+)
+```
+
+Row {data-height=475}
+-----------------------------------------------------------------------
+
+### Route
+
+```{r}
+make_map("GAL")
+```
+
+### Elevation plot
+
+```{r}
+make_elevation_sequential("GAL")
+```
+
+Row {data-height=420}
+-----------------------------------------------------------------------
+
+### Compare days · distance vs height climbed
+
+```{r}
+make_compare_days("GAL")
+```
+
+### Day statistics
+
+```{r}
+make_stats_table("GAL")
+```
+
+2025: Écrins
+=====================================
+
+Row {data-height=105}
+-----------------------------------------------------------------------
+
+### Distance
+
+```{r}
+flexdashboard::valueBox(
+  paste0(
+    round(
+      group_stat(
+        "ECRINS",
+        "distance_km"
+      ),
+      1
+    ),
+    " km"
+  ),
+  caption = "Écrins · total distance",
+  color = "primary"
+)
+```
+
+### Climbing
+
+```{r}
+flexdashboard::valueBox(
+  paste0(
+    round(
+      group_stat(
+        "ECRINS",
+        "ascent_m"
+      )
+    ),
+    " m"
+  ),
+  caption = "Écrins · total ascent",
+  color = "warning"
+)
+```
+
+### Descending
+
+```{r}
+flexdashboard::valueBox(
+  paste0(
+    round(
+      group_stat(
+        "ECRINS",
+        "descent_m"
+      )
+    ),
+    " m"
+  ),
+  caption = "Écrins · total descent",
+  color = "info"
+)
+```
+
+### Highest point
+
+```{r}
+flexdashboard::valueBox(
+  paste0(
+    round(
+      group_stat(
+        "ECRINS",
+        "max_m"
+      )
+    ),
+    " m"
+  ),
+  caption = "Écrins · highest point",
+  color = "success"
+)
+```
+
+Row {data-height=475}
+-----------------------------------------------------------------------
+
+### Route
+
+```{r}
+make_map("ECRINS")
+```
+
+### Elevation plot
+
+```{r}
+make_elevation_sequential("ECRINS")
+```
+
+Row {data-height=420}
+-----------------------------------------------------------------------
+
+### Compare days · distance vs height climbed
+
+```{r}
+make_compare_days("ECRINS")
+```
+
+### Day statistics
+
+```{r}
+make_stats_table("ECRINS")
+```
+
+2026: Flirsch
+=====================================
+
+Row {data-height=105}
+-----------------------------------------------------------------------
+
+### Distance
+
+```{r}
+flexdashboard::valueBox(
+  paste0(
+    round(
+      group_stat(
+        "FL",
+        "distance_km"
+      ),
+      1
+    ),
+    " km"
+  ),
+  caption = "Flirsch · total distance",
+  color = "primary"
+)
+```
+
+### Climbing
+
+```{r}
+flexdashboard::valueBox(
+  paste0(
+    round(
+      group_stat(
+        "FL",
+        "ascent_m"
+      )
+    ),
+    " m"
+  ),
+  caption = "Flirsch · total ascent",
+  color = "warning"
+)
+```
+
+### Descending
+
+```{r}
+flexdashboard::valueBox(
+  paste0(
+    round(
+      group_stat(
+        "FL",
+        "descent_m"
+      )
+    ),
+    " m"
+  ),
+  caption = "Flirsch · total descent",
+  color = "info"
+)
+```
+
+### Highest point
+
+```{r}
+flexdashboard::valueBox(
+  paste0(
+    round(
+      group_stat(
+        "FL",
+        "max_m"
+      )
+    ),
+    " m"
+  ),
+  caption = "Flirsch · highest point",
+  color = "success"
+)
+```
+
+Row {data-height=475}
+-----------------------------------------------------------------------
+
+### Route
+
+```{r}
+make_map("FL")
+```
+
+### Elevation plot
+
+```{r}
+make_elevation_sequential("FL")
+```
+
+Row {data-height=420}
+-----------------------------------------------------------------------
+
+### Compare days · distance vs height climbed
+
+```{r}
+make_compare_days("FL")
+```
+
+### Day statistics
+
+```{r}
+make_stats_table("FL")
+```
