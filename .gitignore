@@ -2,5 +2,7 @@
 .Rhistory
 .RData
 .Ruserdata
-Data
-Scripts/_old
+Scripts
+Data/1_Input
+Data/2_Intermediate
+Data/3_Output/_old
