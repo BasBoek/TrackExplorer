@@ -1,0 +1,50 @@
+name: Deploy Unsere Wege to GitHub Pages
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "Data/3_Output/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "github-pages"
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Check rendered dashboard
+        shell: bash
+        run: |
+          test -f Data/3_Output/index.html || {
+            echo "Data/3_Output/index.html is missing."
+            echo "Knit Scripts/02_Dashboard.Rmd locally and commit the rendered output first."
+            exit 1
+          }
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload dashboard
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: "Data/3_Output"
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
